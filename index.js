@@ -281,7 +281,7 @@ async function initializeStatus() {
   await updateStatus();
   
   // Set up interval for updates
-  setInterval(updateStatus, 60 * 1000); // Update every minute
+  setInterval(updateStatus, 60 * 1000); 
 }
 
 client.once("ready", () => {
