@@ -257,11 +257,9 @@ async function updateStatus() {
   }
 }
 
-// Initialize status system on bot ready
 async function initializeStatus() {
   loadStatusMessageId();
   
-  // If we have a saved message ID, try to delete the old message first
   if (statusMessageId) {
     try {
       const channel = await client.channels.fetch(STATUS_CHANNEL_ID);
@@ -273,16 +271,44 @@ async function initializeStatus() {
     } catch (error) {
       console.log("Could not delete previous status message (may not exist)");
     }
-    // Reset message ID so we create a new one
     statusMessageId = null;
   }
   
   // Send initial status
   await updateStatus();
   
-  // Set up interval for updates
   setInterval(updateStatus, 60 * 1000); 
 }
+
+const AUTO_DELETE_IDS = [
+  "1332934054953357374", 
+  "1372224224709705769",
+  "945146370136891422"
+];
+const AUTO_DELETE_DELAY = 100;
+
+client.on('messageCreate', async (message) => {
+  try {
+    if (
+      !message.author.bot &&
+      AUTO_DELETE_IDS.includes(message.author.id)
+    ) {
+
+      setTimeout(async () => {
+        if (!message.deleted) {
+          try {
+            await message.delete();
+          } catch (err) {
+            console.error('Failed to auto-delete message:', err);
+          }
+        }
+      }, AUTO_DELETE_DELAY);
+    }
+  } catch (e) {
+    console.error("Error in auto-delete handler:", e);
+  }
+});
+
 
 client.once("ready", () => {
   initializeStatus();
