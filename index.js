@@ -97,7 +97,31 @@ for (const file of eventFiles) {
 const STATUS_CHANNEL_ID = "1383673159865340024";
 const SERVER_IP = "160.187.210.218:26058";
 const API_URL = `https://api.mcsrvstat.us/bedrock/3/${SERVER_IP}`;
+const STATUS_FILE = path.join(__dirname, 'status_message.json');
 let statusMessageId = null;
+
+// Load saved message ID on startup
+function loadStatusMessageId() {
+  try {
+    if (fs.existsSync(STATUS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8'));
+      statusMessageId = data.messageId;
+      console.log(`Loaded status message ID: ${statusMessageId}`);
+    }
+  } catch (error) {
+    console.error('Error loading status message ID:', error);
+  }
+}
+
+// Save message ID to file
+function saveStatusMessageId(messageId) {
+  try {
+    fs.writeFileSync(STATUS_FILE, JSON.stringify({ messageId }));
+    statusMessageId = messageId;
+  } catch (error) {
+    console.error('Error saving status message ID:', error);
+  }
+}
 
 async function fetchServerStatus() {
   try {
@@ -209,26 +233,59 @@ async function updateStatus() {
 
   try {
     if (statusMessageId) {
-      const msg = await channel.messages.fetch(statusMessageId);
-      await msg.edit({ embeds: [embed] });
+      try {
+        const msg = await channel.messages.fetch(statusMessageId);
+        await msg.edit({ embeds: [embed] });
+      } catch (fetchError) {
+        // Message doesn't exist, delete old ID and send new message
+        console.log("Previous status message not found, sending new one");
+        const sent = await channel.send({ embeds: [embed] });
+        saveStatusMessageId(sent.id);
+      }
     } else {
       const sent = await channel.send({ embeds: [embed] });
-      statusMessageId = sent.id;
+      saveStatusMessageId(sent.id);
     }
   } catch (e) {
     console.error("Error sending/editing status embed:", e);
     try {
       const fallback = await channel.send({ embeds: [embed] });
-      statusMessageId = fallback.id;
+      saveStatusMessageId(fallback.id);
     } catch (sendErr) {
       console.error("Fallback send failed:", sendErr);
     }
   }
 }
 
-client.once("ready", () => {
-  updateStatus();
+// Initialize status system on bot ready
+async function initializeStatus() {
+  loadStatusMessageId();
+  
+  // If we have a saved message ID, try to delete the old message first
+  if (statusMessageId) {
+    try {
+      const channel = await client.channels.fetch(STATUS_CHANNEL_ID);
+      if (channel?.isTextBased()) {
+        const oldMessage = await channel.messages.fetch(statusMessageId);
+        await oldMessage.delete();
+        console.log("Deleted previous status message");
+      }
+    } catch (error) {
+      console.log("Could not delete previous status message (may not exist)");
+    }
+    // Reset message ID so we create a new one
+    statusMessageId = null;
+  }
+  
+  // Send initial status
+  await updateStatus();
+  
+  // Set up interval for updates
   setInterval(updateStatus, 60 * 1000);
+}
+
+client.once("ready", () => {
+  initializeStatus();
 });
 
 client.login(TOKEN);
