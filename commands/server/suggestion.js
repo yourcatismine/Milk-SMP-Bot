@@ -36,7 +36,7 @@ module.exports = {
 
         suggestionCooldowns.set(userId, now + cooldownTime);
 
-        const CHANNELID = '1397448104885747826';
+        const CHANNELID = '1359038906644828202';
         const channel = interaction.guild.channels.cache.get(CHANNELID);
 
         if (!channel) {
@@ -53,9 +53,14 @@ module.exports = {
             .setTimestamp();
 
         try {
-            const react = await channel.send({ embeds: [embed] });
-            await react.react("⬆️");
-            await react.react("⬇️");
+            const message = await channel.send({ embeds: [embed] });
+            await message.startThread({
+                name: `Suggestion by ${interaction.user.tag}`,
+                autoArchiveDuration: 60,
+                reason: "New suggestion thread",
+            });
+            await message.react("⬆️");
+            await message.react("⬇️");
 
             return interaction.editReply({
                 content: "Your suggestion has been sent successfully!",
