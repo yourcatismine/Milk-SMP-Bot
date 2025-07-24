@@ -11,12 +11,18 @@ module.exports = {
                 .setDescription("Your suggestion text")
                 .setRequired(true)
                 .setMaxLength(200)
+        )
+        .addAttachmentOption(option =>
+            option.setName("attachment")
+                .setDescription("Optional attachment for your suggestion")
+                .setRequired(false)
         ),
 
     async execute(interaction) {
         await interaction.deferReply({ ephemeral: true });
 
         const suggestion = interaction.options.getString("suggestion");
+        const attachment = interaction.options.getAttachment("attachment");
         const userId = interaction.user.id;
         const now = Date.now();
         const cooldownTime = 60 * 60 * 1000; 
@@ -46,11 +52,16 @@ module.exports = {
         }
 
         const embed = new EmbedBuilder()
+            .setThumbnail(interaction.guild.iconURL({ dynamic: true }))
             .setColor(0x00ff00)
             .setTitle("New Suggestion")
-            .setDescription(suggestion)
+            .setDescription(`\`\`\`${suggestion}\`\`\``)
             .setFooter({ text: `Suggested by ${interaction.user.tag}`, iconURL: interaction.user.displayAvatarURL({ dynamic: true }) })
             .setTimestamp();
+
+        if (attachment) {
+            embed.setImage(attachment.url);
+        }
 
         try {
             const message = await channel.send({ embeds: [embed] });
