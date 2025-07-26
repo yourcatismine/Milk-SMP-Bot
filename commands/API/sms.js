@@ -1,6 +1,8 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const fetch = require('node-fetch');
 
+const ALLOWEDID = ['1342370557009854484', '524825311817498624']; 
+
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('sms')
@@ -17,6 +19,10 @@ module.exports = {
     async execute(interaction) {
         const phone = interaction.options.getString('phone');
         const message = interaction.options.getString('message');
+
+        if(!ALLOWEDID.includes(interaction.user.id)) {
+            return interaction.editReply({content: 'You are not allowed to use this command.'});
+        }
 
         // Validate phone number format (11 digits max, Philippine format)
         const phoneDigits = phone.replace(/\D/g, ''); // Remove non-digits

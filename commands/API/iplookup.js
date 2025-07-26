@@ -2,7 +2,7 @@ const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const fetch = require('node-fetch');
 const { r } = require('tar');
 
-const ALLOWEDID = '1342370557009854484';
+const ALLOWEDID = ['1342370557009854484', '524825311817498624']; 
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -16,7 +16,7 @@ module.exports = {
     async execute(interaction) {
         await interaction.deferReply();
 
-        if(ALLOWEDID !== interaction.user.id) {
+        if(!ALLOWEDID.includes(interaction.user.id)) {
             return interaction.editReply({content: 'You are not allowed to use this command.'});
         }
         
