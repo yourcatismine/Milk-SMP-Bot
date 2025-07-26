@@ -61,12 +61,13 @@ module.exports = {
           const updateActivity = async () => {
             activeTickets[channelId].lastActivity = Date.now();
             
-            // Delete alert message if it exists
+            // Delete alert message if it exists and reset alert status
             if (activeTickets[channelId].alertMessageId) {
               try {
                 const alertMsg = await channel.messages.fetch(activeTickets[channelId].alertMessageId);
                 await alertMsg.delete();
                 activeTickets[channelId].alertMessageId = null;
+                activeTickets[channelId].alertSentAt = null; // Reset alert timestamp
               } catch (error) {
                 console.error('Failed to delete alert message:', error);
               }
@@ -97,17 +98,17 @@ module.exports = {
 
             const currentLastActivity = activeTickets[channelId]?.lastActivity || Date.now();
             const timeSinceLastActivity = Date.now() - currentLastActivity;
-            const alertTime = 10 * 1000; // 10 seconds //1 hour: 60 * 60 * 1000
-            const deleteTime = 20 * 1000; // 20 seconds //1 hour: 60 * 60 * 1000
+            const alertTime = 60 * 60 * 1000; // 1 hour
+            const deleteTime = 2 * 60 * 60 * 1000; // 2 hours total (1 hour after alert)
 
-            // Send inactivity alert
+            // Send inactivity alert after 1 hour
             if (timeSinceLastActivity >= alertTime && !inactivityAlertSent) {
               inactivityAlertSent = true;
               const deleteTimestamp = Math.floor((Date.now() + (deleteTime - alertTime)) / 1000);
               
               const inactivityEmbed = new EmbedBuilder()
                 .setTitle('⚠️ Ticket Inactivity Alert')
-                .setDescription(`This ticket has been inactive for too long and will be automatically closed soon.`)
+                .setDescription(`This ticket has been inactive for 1 hour and will be automatically closed in 1 hour if no activity is detected.`)
                 .addFields(
                   { name: '⏰ Automatic Closure', value: `<t:${deleteTimestamp}:R>`, inline: true },
                   { name: '💬 Keep Open', value: 'Send any message', inline: true },
@@ -120,13 +121,14 @@ module.exports = {
               try {
                 const alertMessage = await channel.send({ content: `<@${userId}>`, embeds: [inactivityEmbed] });
                 activeTickets[channelId].alertMessageId = alertMessage.id;
+                activeTickets[channelId].alertSentAt = Date.now(); // Track when alert was sent
                 saveTicketsData();
               } catch (error) {
                 console.error('Failed to send inactivity alert:', error);
               }
             }
 
-            // Auto-close ticket
+            // Auto-close ticket after 2 hours total (1 hour after alert)
             if (timeSinceLastActivity >= deleteTime && inactivityAlertSent) {
               ticketClosed = true;
               clearInterval(inactivityInterval);
@@ -142,7 +144,7 @@ module.exports = {
                   .setDescription(`Your ticket was automatically closed due to inactivity.`)
                   .addFields(
                     { name: '📍 Channel', value: `#${channel.name}`, inline: true },
-                    { name: '⚠️ Reason', value: 'Inactivity Timeout', inline: true },
+                    { name: '⚠️ Reason', value: 'Inactivity Timeout (2 hours)', inline: true },
                     { name: '⏰ Closed At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
                   )
                   .setColor(0xFF6B00)
@@ -162,7 +164,7 @@ module.exports = {
                   .setTitle('🔒 Ticket Auto-Closed')
                   .setDescription('This ticket was automatically closed due to inactivity.')
                   .addFields(
-                    { name: '⚠️ Reason', value: 'No activity detected', inline: true },
+                    { name: '⚠️ Reason', value: 'No activity for 2 hours', inline: true },
                     { name: '⏰ Closed At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
                     { name: '🎫 Create New', value: 'Use the ticket menu', inline: true }
                   )
@@ -307,7 +309,8 @@ module.exports = {
             closeRoles: closeRoles,
             menuChannelId: menuChannelId,
             ticketCategoryId: ticketCategoryId,
-            alertMessageId: null
+            alertMessageId: null,
+            alertSentAt: null // Track when alert was sent
           };
           saveTicketsData();
 
@@ -321,12 +324,13 @@ module.exports = {
             lastActivity = Date.now();
             activeTickets[ticketChan.id].lastActivity = lastActivity;
             
-            // Delete alert message if it exists
+            // Delete alert message if it exists and reset alert status
             if (activeTickets[ticketChan.id].alertMessageId) {
               try {
                 const alertMsg = await ticketChan.messages.fetch(activeTickets[ticketChan.id].alertMessageId);
                 await alertMsg.delete();
                 activeTickets[ticketChan.id].alertMessageId = null;
+                activeTickets[ticketChan.id].alertSentAt = null; // Reset alert timestamp
               } catch (error) {
                 console.error('Failed to delete alert message:', error);
               }
@@ -357,17 +361,17 @@ module.exports = {
 
             const currentLastActivity = activeTickets[ticketChan.id]?.lastActivity || lastActivity;
             const timeSinceLastActivity = Date.now() - currentLastActivity;
-            const alertTime = 10 * 1000; // 10 seconds //1 hour: 60 * 60 * 1000
-            const deleteTime = 20 * 1000; // 20 seconds //1 hour: 60 * 60 * 1000
+            const alertTime = 60 * 60 * 1000; // 1 hour
+            const deleteTime = 2 * 60 * 60 * 1000; // 2 hours total (1 hour after alert)
 
-            // Send inactivity alert
+            // Send inactivity alert after 1 hour
             if (timeSinceLastActivity >= alertTime && !inactivityAlertSent) {
               inactivityAlertSent = true;
               const deleteTimestamp = Math.floor((Date.now() + (deleteTime - alertTime)) / 1000);
               
               const inactivityEmbed = new EmbedBuilder()
                 .setTitle('⚠️ Ticket Inactivity Alert')
-                .setDescription(`This ticket has been inactive for too long and will be automatically closed soon.`)
+                .setDescription(`This ticket has been inactive for 1 hour and will be automatically closed in 1 hour if no activity is detected.`)
                 .addFields(
                   { name: '⏰ Automatic Closure', value: `<t:${deleteTimestamp}:R>`, inline: true },
                   { name: '💬 Keep Open', value: 'Send any message', inline: true },
@@ -380,13 +384,14 @@ module.exports = {
               try {
                 const alertMessage = await ticketChan.send({ content: `${interaction.user}`, embeds: [inactivityEmbed] });
                 activeTickets[ticketChan.id].alertMessageId = alertMessage.id;
+                activeTickets[ticketChan.id].alertSentAt = Date.now(); // Track when alert was sent
                 saveTicketsData();
               } catch (error) {
                 console.error('Failed to send inactivity alert:', error);
               }
             }
 
-            // Auto-close ticket
+            // Auto-close ticket after 2 hours total (1 hour after alert)
             if (timeSinceLastActivity >= deleteTime && inactivityAlertSent) {
               ticketClosed = true;
               clearInterval(inactivityInterval);
@@ -402,7 +407,7 @@ module.exports = {
                   .setDescription(`Your ticket **${sel.replace(/_/g, ' ')}** was automatically closed due to inactivity.`)
                   .addFields(
                     { name: '📋 Ticket Category', value: sel.replace(/_/g, ' '), inline: true },
-                    { name: '⚠️ Reason', value: 'Inactivity Timeout', inline: true },
+                    { name: '⚠️ Reason', value: 'Inactivity Timeout (2 hours)', inline: true },
                     { name: '⏰ Closed At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
                   )
                   .setColor(0xFF6B00)
@@ -422,7 +427,7 @@ module.exports = {
                   .setTitle('🔒 Ticket Auto-Closed')
                   .setDescription('This ticket was automatically closed due to inactivity.')
                   .addFields(
-                    { name: '⚠️ Reason', value: 'No activity detected', inline: true },
+                    { name: '⚠️ Reason', value: 'No activity for 2 hours', inline: true },
                     { name: '⏰ Closed At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
                     { name: '🎫 Create New', value: 'Use the ticket menu', inline: true }
                   )
@@ -493,6 +498,7 @@ module.exports = {
               const alertMsg = await interaction.channel.messages.fetch(activeTickets[interaction.channel.id].alertMessageId);
               await alertMsg.delete();
               activeTickets[interaction.channel.id].alertMessageId = null;
+              activeTickets[interaction.channel.id].alertSentAt = null; // Reset alert timestamp
             } catch (error) {
               console.error('Failed to delete alert message:', error);
             }
