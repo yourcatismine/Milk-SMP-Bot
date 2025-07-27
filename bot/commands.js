@@ -11,11 +11,31 @@ const cooldownTime = 5000;
 module.exports = {
   name: Events.InteractionCreate,
   async execute(interaction) {
+    // Handle autocomplete interactions FIRST (before cooldown checks)
+    if (interaction.isAutocomplete()) {
+      const command = interaction.client.commands.get(interaction.commandName);
+      
+      if (!command) {
+        console.error(`No command matching ${interaction.commandName} was found.`);
+        return;
+      }
+
+      try {
+        await command.autocomplete(interaction);
+      } catch (error) {
+        console.error('Autocomplete error:', error);
+      }
+      return; // Important: return here to prevent further execution
+    }
+
+    // Handle slash commands
     if (!interaction.isChatInputCommand()) return;
+    
     const commandName = interaction.commandName;
     const userId = interaction.user.id;
     const now = Date.now();
 
+    // Cooldown logic
     if (!cooldowns.has(commandName)) {
       cooldowns.set(commandName, new Collection());
     }
@@ -45,6 +65,7 @@ module.exports = {
         });
       }
     }
+    
     userCooldowns.set(userId, now); // Set cooldown for regular role
     const command = interaction.client.commands.get(interaction.commandName);
 
