@@ -102,6 +102,7 @@
     "npmlog": "^1.2.1",
     "number-is-nan": "^1.0.1",
     "once": "^1.4.0",
+    "openai": "^5.10.2",
     "os-locale": "^1.4.0",
     "path-is-absolute": "^1.0.1",
     "prismarine-auth": "^2.7.0",
