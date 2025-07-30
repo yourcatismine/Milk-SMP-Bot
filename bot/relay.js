@@ -258,20 +258,24 @@ async function sendGreeting(client, config, greetingType) {
         
         // Create a specific time object for the scheduled greeting time
         const now = new Date();
-        const manilaTime = new Date(now.toLocaleString("en-US", { timeZone: TIMEZONE }));
+        
+        // Get Manila time properly for date calculation
+        const manilaTimeString = now.toLocaleString("en-US", { timeZone: TIMEZONE });
+        const manilaTime = new Date(manilaTimeString);
         
         // Create greeting time string directly from config values
         const hour12 = config.hour > 12 ? config.hour - 12 : (config.hour === 0 ? 12 : config.hour);
         const ampm = config.hour >= 12 ? 'PM' : 'AM';
         const timeString = `${hour12.toString().padStart(2, '0')}:${config.minute.toString().padStart(2, '0')} ${ampm}`;
         
-        const dateString = manilaTime.toLocaleDateString('en-US', {
+        // Get the correct date in Manila timezone
+        const dateString = new Intl.DateTimeFormat('en-US', {
             weekday: 'long',
             year: 'numeric',
             month: 'long',
             day: 'numeric',
             timeZone: TIMEZONE
-        });
+        }).format(now);
         
         // Select random title and message
         const randomTitle = config.titles[Math.floor(Math.random() * config.titles.length)];
@@ -410,7 +414,7 @@ async function sendGreeting(client, config, greetingType) {
             });
         }
         
-        await channel.send({ embeds: [embed], content: '@everyone' });
+        await channel.send({ embeds: [embed] }); //Removed @everyone mention for a more relaxed approach
         
     } catch (error) {
         console.error(`❌ Error sending ${greetingType} greeting:`, error);
