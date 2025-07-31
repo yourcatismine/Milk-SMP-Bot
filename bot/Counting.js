@@ -1,14 +1,70 @@
 const { Events, EmbedBuilder } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
 
 const COUNTING_CHANNEL_ID = '1359038929730404352';
 
+const DATA_FILE = path.join(__dirname, 'counting_data.json');
+
 let currentNumber = 0;
 let lastUser = null;
+let reminderTimeout = null;
+
+function loadCountingData() {
+    try {
+        if (fs.existsSync(DATA_FILE)) {
+            const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+            currentNumber = data.currentNumber || 0;
+            lastUser = data.lastUser || null;
+            console.log(`✅ Loaded counting data: Current number is ${currentNumber}`);
+        }
+    } catch (error) {
+        console.error('❌ Error loading counting data:', error);
+    }
+}
+
+// Save counting data
+function saveCountingData() {
+    try {
+        const data = {
+            currentNumber,
+            lastUser,
+            lastSaved: new Date().toISOString()
+        };
+        fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+    } catch (error) {
+        console.error('❌ Error saving counting data:', error);
+    }
+}
+
+function setReminder(channel) {
+    if (reminderTimeout) {
+        clearTimeout(reminderTimeout);
+    }
+    
+    reminderTimeout = setTimeout(() => {
+        const nextNumber = currentNumber + 1;
+        const reminderEmbed = new EmbedBuilder()
+            .setColor('#3742fa')
+            .setTitle('⏰ Counting Reminder!')
+            .setDescription('Hey everyone! The counting game is waiting for the next number!')
+            .addFields(
+                { name: '🔢 Current Number', value: `**${currentNumber}**`, inline: true },
+                { name: '🎯 Next Number', value: `**${nextNumber}**`, inline: true },
+                { name: '⚡ Status', value: 'Ready to continue!', inline: true }
+            )
+            .setFooter({ text: 'Keep the count going! 🚀' })
+            .setTimestamp();
+            
+        channel.send({ embeds: [reminderEmbed] });
+    }, 60000); 
+}
+
+loadCountingData();
 
 module.exports = {
     name: Events.MessageCreate,
     async execute(message) {
-        // Ignore bot messages
         if (message.author.bot) return;
 
         if (message.channel.id !== COUNTING_CHANNEL_ID) return;
@@ -16,11 +72,16 @@ module.exports = {
         const content = message.content.trim();
         const expectedNumber = currentNumber + 1;
 
-        // Check if message is a number
         if (!/^\d+$/.test(content)) {
             currentNumber = 0;
             lastUser = null;
+            saveCountingData(); 
             message.react('❌').catch(() => {});
+            
+            if (reminderTimeout) {
+                clearTimeout(reminderTimeout);
+                reminderTimeout = null;
+            }
             
             const invalidEmbed = new EmbedBuilder()
                 .setColor('#ff4757')
@@ -40,11 +101,16 @@ module.exports = {
 
         const userNumber = parseInt(content);
 
-        // Check if it's the correct number
         if (userNumber !== expectedNumber) {
             currentNumber = 0;
             lastUser = null;
+            saveCountingData(); 
             message.react('❌').catch(() => {});
+            
+            if (reminderTimeout) {
+                clearTimeout(reminderTimeout);
+                reminderTimeout = null;
+            }
             
             const wrongEmbed = new EmbedBuilder()
                 .setColor('#ff6b81')
@@ -87,8 +153,10 @@ module.exports = {
 
         currentNumber = userNumber;
         lastUser = message.author.id;
-
+        saveCountingData();
         message.react('✅').catch(() => {});
+
+        setReminder(message.channel);
 
         if (userNumber % 100 === 0) {
             const milestoneEmbed = new EmbedBuilder()
@@ -99,7 +167,7 @@ module.exports = {
                     { name: '🏆 Achievement', value: `**${userNumber}** Numbers Counted!`, inline: true },
                     { name: '👤 Counter', value: `${message.author}`, inline: true }
                 )
-                .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+                .setThumbnail('https://cdn.discordapp.com/emojis/787091712399998012.png')
                 .setFooter({ text: 'Keep the streak going!' })
                 .setTimestamp();
                 
