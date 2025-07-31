@@ -184,10 +184,10 @@ module.exports = {
 
     // Bot Status System
     const statuses = [
-      { name: "Milk SMP", type: ActivityType.Playing },
-      { name: "Paid Bedrock Server!", type: ActivityType.Listening },
+      { name: "Milk Survival", type: ActivityType.Playing },
+      { name: "Pure Crossplay Survival Server!", type: ActivityType.Listening },
       { name: "Filipino!", type: ActivityType.Competing },
-      { name: "Season 2 Released!", type: ActivityType.Playing },
+      { name: "Season 3 Released!", type: ActivityType.Playing },
     ];
 
     function updateStatus() {
