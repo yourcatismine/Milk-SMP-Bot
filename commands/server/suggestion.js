@@ -42,7 +42,7 @@ module.exports = {
 
         suggestionCooldowns.set(userId, now + cooldownTime);
 
-        const CHANNELID = '1359038906644828202';
+        const CHANNELID = '1397448104885747826';
         const channel = interaction.guild.channels.cache.get(CHANNELID);
 
         if (!channel) {
