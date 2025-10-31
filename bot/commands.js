@@ -4,6 +4,7 @@ const {
   EmbedBuilder,
   Collection,
 } = require("discord.js");
+const whitelistHandler = require('./Whitelist.js');
 
 const cooldowns = new Collection();
 const cooldownTime = 5000;
@@ -11,6 +12,21 @@ const cooldownTime = 5000;
 module.exports = {
   name: Events.InteractionCreate,
   async execute(interaction) {
+    // Handle button interactions for whitelist system
+    if (interaction.isButton()) {
+      try {
+        await whitelistHandler.handleButtonInteraction(interaction, interaction.client);
+        return;
+      } catch (error) {
+        console.error('Error handling whitelist button:', error);
+        await interaction.reply({ 
+          content: '❌ An error occurred while processing your request!',
+          flags: MessageFlags.Ephemeral 
+        }).catch(() => {});
+        return;
+      }
+    }
+
     // Handle autocomplete interactions FIRST (before cooldown checks)
     if (interaction.isAutocomplete()) {
       const command = interaction.client.commands.get(interaction.commandName);

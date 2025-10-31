@@ -1,1 +1,22 @@
-{}
+{
+  "1433840471007957033": {
+    "channelId": "1433840471007957033",
+    "userId": "395409890169978885",
+    "username": "shinitori_",
+    "category": "bug",
+    "createdAt": 1761924608575,
+    "lastActivity": 1761927356685,
+    "claimRoles": [
+      "1422620387031908522",
+      "1423525483575906455"
+    ],
+    "closeRoles": [
+      "1422620387031908522",
+      "1423525483575906455"
+    ],
+    "menuChannelId": "1432672104750387200",
+    "ticketCategoryId": "1432670594700411000",
+    "alertMessageId": null,
+    "alertSentAt": null
+  }
+}

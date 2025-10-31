@@ -94,11 +94,12 @@ for (const file of eventFiles) {
 }
 
 //Server Status
-const STATUS_CHANNEL_ID = "1383673159865340024";
-const SERVER_IP = "160.187.210.218:26058";
-const API_URL = `https://api.mcsrvstat.us/bedrock/3/${SERVER_IP}`;
-const STATUS_FILE = path.join(__dirname, 'status_message.json');
+const STATUS_CHANNEL_ID = "1422974216847753276";
+const SERVER_IP = "milksmp.atbphosting.com:26000";
+const API_URL = `https://api.mcsrvstat.us/3/${SERVER_IP}`;
+const STATUS_FILE = path.join(__dirname, "status_message.json");
 let statusMessageId = null;
+const userMessageCounts = new Map();
 
 // Load saved message ID on startup
 function loadStatusMessageId() {
@@ -139,13 +140,13 @@ async function updateStatus() {
 
   const data = await fetchServerStatus();
   const online = data?.online ?? false;
-  const namePrefix = online ? "🟢・status" : "🔴・status";
+ // const namePrefix = online ? "🟢・status" : "🔴・status";
 
-  try {
-    if (channel.name !== namePrefix) await channel.setName(namePrefix);
-  } catch (e) {
-    console.error("Failed to rename channel:", e);
-  }
+ // try {
+ //   if (channel.name !== namePrefix) await channel.setName(namePrefix);
+ // } catch (e) {
+ //   console.error("Failed to rename channel:", e);
+ // }
 
   // Prepare player list for online servers
   let playerListField = null;
@@ -167,7 +168,7 @@ async function updateStatus() {
     }
 
     playerListField = {
-      name: "👤 Online Players",
+      name: "👤 ᴘʟᴀʏᴇʀѕ",
       value: playerListText,
       inline: false,
     };
@@ -179,17 +180,17 @@ async function updateStatus() {
   if (online) {
     fields = [
       {
-        name: "📦 Version",
-        value: data.version || "Unknown",
+        name: "📦 ᴠᴇʀѕɪᴏɴ",
+        value: data.version || "ᴜɴᴋɴᴏᴡɴ",
         inline: true,
       },
       {
-        name: "👥 Players",
+        name: "👥 ᴘʟᴀʏᴇʀѕ",
         value: `${data.players.online}/${data.players.max}`,
         inline: true,
       },
       {
-        name: "🧭 IP:Port",
+        name: "🧭 ɪᴘ ᴀɴᴅ ᴘᴏʀᴛ",
         value: `\`${SERVER_IP}\``,
         inline: false,
       },
@@ -198,7 +199,7 @@ async function updateStatus() {
     // Add MOTD if available
     if (data.motd?.clean) {
       fields.push({
-        name: "📝 MOTD",
+        name: "📝 ᴍᴏᴛᴅ",
         value: data.motd.clean.join("\n") || "None",
         inline: false,
       });
@@ -211,7 +212,7 @@ async function updateStatus() {
   } else {
     fields = [
       {
-        name: "🧭 IP:Port",
+        name: "🧭 ɪᴘ ᴀɴᴅ ᴘᴏʀᴛ",
         value: `\`${SERVER_IP}\``,
         inline: false,
       },
@@ -219,14 +220,14 @@ async function updateStatus() {
   }
 
   const embed = {
-    title: online ? "🟢 Server is Online!" : "🔴 Server is Offline!",
+    title: "ᴇᴍᴘᴏʀɪᴜᴍ",
     color: online ? 0x57f287 : 0xed4245,
     thumbnail: {
       url: "https://api.mcsrvstat.us/icon/" + SERVER_IP.split(":")[0],
     },
     fields: fields,
     footer: {
-      text: "Milk SMP — Auto status updated",
+      text: "ѕᴛɪᴄᴋʏ ᴍᴇѕѕᴀɢᴇ",
     },
     timestamp: new Date().toISOString(),
   };
@@ -235,19 +236,15 @@ async function updateStatus() {
     if (statusMessageId) {
       try {
         const msg = await channel.messages.fetch(statusMessageId);
-        await msg.edit({ embeds: [embed] });
+        await msg.delete();
       } catch (fetchError) {
-        // Message doesn't exist, delete old ID and send new message
-        console.log("Previous status message not found, sending new one");
-        const sent = await channel.send({ embeds: [embed] });
-        saveStatusMessageId(sent.id);
+        console.log("Previous status message not found or already deleted");
       }
-    } else {
-      const sent = await channel.send({ embeds: [embed] });
-      saveStatusMessageId(sent.id);
     }
+    const sent = await channel.send({ embeds: [embed] });
+    saveStatusMessageId(sent.id);
   } catch (e) {
-    console.error("Error sending/editing status embed:", e);
+    console.error("Error sending status embed:", e);
     try {
       const fallback = await channel.send({ embeds: [embed] });
       saveStatusMessageId(fallback.id);
@@ -266,7 +263,6 @@ async function initializeStatus() {
       if (channel?.isTextBased()) {
         const oldMessage = await channel.messages.fetch(statusMessageId);
         await oldMessage.delete();
-        console.log("Deleted previous status message");
       }
     } catch (error) {
       console.log("Could not delete previous status message (may not exist)");
@@ -304,6 +300,15 @@ client.on('messageCreate', async (message) => {
         }
       }, AUTO_DELETE_DELAY);
     }
+
+    if (message.channelId === STATUS_CHANNEL_ID && !message.author.bot) {
+      const count = (userMessageCounts.get(message.author.id) || 0) + 1;
+      userMessageCounts.set(message.author.id, count);
+      if (count === 5) {
+        updateStatus();
+        userMessageCounts.set(message.author.id, 0);
+      }
+    }
   } catch (e) {
     console.error("Error in auto-delete handler:", e);
   }
@@ -314,10 +319,10 @@ const updater = require('./bot/Ticket.js');
 client.once("ready", async () => {
   await updater.execute(
     client,
-    '1385211875544928316', //Channel Send ID
-    '1385214685200257136', //Category ID
-    ['1383795159103180850', '1386902606642810950'], // Claim Role ID
-    ['1383795159103180850', '1386902606642810950'], // Close Role ID
+    '1432672104750387200', //Channel Send ID
+    '1432670594700411000', //Category ID
+    ['1422620387031908522', '1423525483575906455'], // Claim Role ID
+    ['1422620387031908522', '1423525483575906455'], // Close Role ID
     '🎫 Support & Tickets', //Title
     'Select an option below to create tickets or report issues!', //Description
     60 * 60 * 1000 // 1 hour Time Collector
