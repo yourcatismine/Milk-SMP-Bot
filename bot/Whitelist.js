@@ -96,30 +96,30 @@ function extractGamertag(content) {
         return null;
     }
     
-    // Try to extract gamertag - split by space, dash, underscore
-    // Valid formats: "gamertag Java", "gamertag-Java", "gamertag_Java", "JAMES_VEN Java"
-    const parts = trimmed.split(/[\s\-_]+/).filter(p => p.length > 0);
-    console.log(`   [EXTRACT] Split parts:`, parts);
+    // Remove the platform keyword from the end (only split by spaces/dashes before platform)
+    // This preserves underscores within the gamertag
+    const platformRegex = new RegExp(`\\s*${platform}\\s*$`, 'i');
+    const withoutPlatform = trimmed.replace(platformRegex, '').trim();
     
-    // Collect all non-platform parts to reconstruct the full gamertag
-    const gamertagParts = [];
-    for (const part of parts) {
-        const partLower = part.toLowerCase();
-        if (partLower !== 'java' && partLower !== 'bedrock') {
-            // Check if it's a valid gamertag part (alphanumeric and underscore only)
-            if (/^[a-zA-Z0-9_]+$/.test(part)) {
-                gamertagParts.push(part);
-            }
-        }
-    }
+    console.log(`   [EXTRACT] After removing platform: "${withoutPlatform}"`);
     
-    if (gamertagParts.length === 0) {
-        console.log(`   [EXTRACT] ❌ No valid gamertag found`);
+    if (!withoutPlatform) {
+        console.log(`   [EXTRACT] ❌ No gamertag found after removing platform`);
         return null;
     }
     
-    // Reconstruct gamertag by joining parts with underscore
-    const gamertag = gamertagParts.join('_');
+    // Split only by spaces and dashes (not underscores) to preserve gamertag structure
+    const parts = withoutPlatform.split(/[\s\-]+/).filter(p => p.length > 0);
+    console.log(`   [EXTRACT] Split parts (preserving underscores):`, parts);
+    
+    // Join all parts with underscore (in case user used spaces/dashes as separators)
+    const gamertag = parts.join('_');
+    
+    // Validate: only alphanumeric and underscore
+    if (!/^[a-zA-Z0-9_]+$/.test(gamertag)) {
+        console.log(`   [EXTRACT] ❌ Gamertag contains invalid characters: "${gamertag}"`);
+        return null;
+    }
     
     // Validate final gamertag length (2-16 characters, Minecraft limit)
     if (gamertag.length < 2 || gamertag.length > 16) {
@@ -571,11 +571,22 @@ module.exports.handleButtonInteraction = async function(interaction, client) {
             }
 
             // Update user's confirmation message
+            const submittedEmbed = new EmbedBuilder()
+                .setColor('#FFD700')
+                .setTitle('✅ Request Submitted')
+                .setDescription('Your whitelist request has been submitted! Staff will review it soon.')
+                .setFooter({ text: 'Please wait for staff response' })
+                .setTimestamp();
+
             await interaction.update({
-                content: '✅ Your whitelist request has been submitted! Staff will review it soon.',
+                embeds: [submittedEmbed],
                 components: [],
-                embeds: []
             }).catch(() => {});
+
+            // Auto-delete the confirmation message after 10 seconds
+            setTimeout(() => {
+                interaction.message?.delete().catch(() => {});
+            }, 10000);
 
         } catch (error) {
             console.error('❌ Error confirming whitelist request:', error);
@@ -640,6 +651,18 @@ module.exports.handleButtonInteraction = async function(interaction, client) {
             // IMPORTANT: Defer IMMEDIATELY - must happen within 3 seconds
             await interaction.deferReply();
             
+            // Immediately remove buttons from the admin message (don't wait for background work)
+            try {
+                const message = interaction.message;
+                const currentEmbeds = message.embeds || [];
+                await message.edit({
+                    embeds: currentEmbeds,
+                    components: [] // Remove buttons IMMEDIATELY
+                });
+            } catch (btnError) {
+                console.log('⚠️ Could not remove buttons:', btnError.code);
+            }
+            
             // Do heavy work in background while Discord has acknowledged the interaction
             (async () => {
                 try {
@@ -670,8 +693,10 @@ module.exports.handleButtonInteraction = async function(interaction, client) {
                         try {
                             const contentChannel = await interaction.guild.channels.fetch(CONTENT_CHANNEL_ID);
                             if (contentChannel?.isTextBased()) {
-                                await contentChannel.send(`${gamertag}`);
-                                console.log(`✅ Posted gamertag to content channel: ${gamertag}`);
+                                // Add dot prefix for Bedrock gamertags
+                                const gamertagToPost = platform === 'Bedrock' ? `.${gamertag}` : gamertag;
+                                await contentChannel.send(`${gamertagToPost}`);
+                                console.log(`✅ Posted gamertag to content channel: ${gamertagToPost}`);
                             }
                         } catch (err) {
                             console.error(`❌ Could not post to content channel:`, err.message);
@@ -691,8 +716,14 @@ module.exports.handleButtonInteraction = async function(interaction, client) {
                         try {
                             const whitelistChannel = await interaction.guild.channels.fetch(WHITELIST_CHANNEL_ID);
                             if (whitelistChannel?.isTextBased()) {
+                                await whitelistChannel.send(`<@${requestData.userId}>`);
+                                const approvalMentionEmbed = new EmbedBuilder()
+                                    .setColor('#00FF00')
+                                    .setTitle('✅ Whitelist Approved')
+                                    .setDescription(`Your whitelist request for **${gamertag}** has been **APPROVED**! Welcome to the server!`)
+                                    .setTimestamp();
                                 await whitelistChannel.send({
-                                    content: `<@${requestData.userId}> Your whitelist request for **${gamertag}** has been **APPROVED**! ✅ Welcome to the server!`
+                                    embeds: [approvalMentionEmbed]
                                 });
                                 console.log(`✅ Sent approval mention to whitelist channel for user ${requestData.userId}`);
                             }
@@ -706,28 +737,26 @@ module.exports.handleButtonInteraction = async function(interaction, client) {
                         .setColor('#00FF00')
                         .setTitle('✅ Whitelist Approved')
                         .setDescription(`Gamertag: \`${gamertag}\` has been **APPROVED** and notified.${dmFailed ? ' (via mention in whitelist channel)' : ''}`)
+                        .addFields(
+                            { name: 'Approved by', value: `${interaction.user.username}` }
+                        )
                         .setFooter({ text: `Approved by ${interaction.user.username}` })
                         .setTimestamp();
 
                     try {
-                        await interaction.editReply({
-                            embeds: [interaction.message.embeds[0], approvalNote],
-                            components: [] // Remove buttons
+                        // Get the current embeds and add the approval note
+                        const currentEmbeds = interaction.message.embeds || [];
+                        await interaction.message.edit({
+                            embeds: [...currentEmbeds, approvalNote],
+                            components: [] // Remove buttons again
                         });
+                        
+                        // Delete the processing message after showing approval
+                        setTimeout(() => {
+                            interaction.deleteReply().catch(() => {});
+                        }, 2000);
                     } catch (updateError) {
-                        if (updateError.code === 10062) {
-                            // Interaction expired, try to edit the message directly
-                            try {
-                                await interaction.message.edit({
-                                    embeds: [interaction.message.embeds[0], approvalNote],
-                                    components: []
-                                });
-                            } catch (e) {
-                                console.log('⚠️ Could not update expired message:', e.code);
-                            }
-                        } else {
-                            throw updateError;
-                        }
+                        console.log('⚠️ Could not update message with approval note:', updateError.code);
                     }
 
                     // Remove from pending
@@ -737,16 +766,18 @@ module.exports.handleButtonInteraction = async function(interaction, client) {
                     console.log(`✅ Whitelist approved for ${gamertag} by ${interaction.user.username}`);
                 } catch (error) {
                     console.error('❌ Error in background whitelist approval:', error);
-                    try {
-                        await interaction.editReply({ content: '❌ Error approving request!' });
-                    } catch (e) {
-                        console.error('Could not send error response:', e.code);
-                    }
                 }
             })(); // Execute IIFE immediately without awaiting
             
             // Send immediate confirmation that request is being processed
-            await interaction.editReply({ content: '⏳ Processing whitelist approval...' });
+            const processingEmbed = new EmbedBuilder()
+                .setColor('#FFD700')
+                .setTitle('⏳ Processing')
+                .setDescription('Processing whitelist approval...')
+                .setFooter({ text: 'Please wait' })
+                .setTimestamp();
+            
+            await interaction.editReply({ embeds: [processingEmbed] });
 
         } catch (error) {
             console.error('❌ Error deferring whitelist approval:', error);
@@ -786,6 +817,18 @@ module.exports.handleButtonInteraction = async function(interaction, client) {
             // IMPORTANT: Defer IMMEDIATELY - must happen within 3 seconds
             await interaction.deferReply();
             
+            // Immediately remove buttons from the admin message (don't wait for background work)
+            try {
+                const message = interaction.message;
+                const currentEmbeds = message.embeds || [];
+                await message.edit({
+                    embeds: currentEmbeds,
+                    components: [] // Remove buttons IMMEDIATELY
+                });
+            } catch (btnError) {
+                console.log('⚠️ Could not remove buttons:', btnError.code);
+            }
+            
             // Do heavy work in background while Discord has acknowledged the interaction
             (async () => {
                 try {
@@ -808,8 +851,14 @@ module.exports.handleButtonInteraction = async function(interaction, client) {
                         try {
                             const whitelistChannel = await interaction.guild.channels.fetch(WHITELIST_CHANNEL_ID);
                             if (whitelistChannel?.isTextBased()) {
+                                await whitelistChannel.send(`<@${requestData.userId}>`);
+                                const denialMentionEmbed = new EmbedBuilder()
+                                    .setColor('#FF0000')
+                                    .setTitle('❌ Whitelist Denied')
+                                    .setDescription(`Your whitelist request for **${gamertag}** has been **DENIED**. Please contact staff for more information.`)
+                                    .setTimestamp();
                                 await whitelistChannel.send({
-                                    content: `<@${requestData.userId}> Your whitelist request for **${gamertag}** has been **DENIED**. ❌ Please contact staff for more information.`
+                                    embeds: [denialMentionEmbed]
                                 });
                                 console.log(`✅ Sent denial mention to whitelist channel for user ${requestData.userId}`);
                             }
@@ -823,28 +872,26 @@ module.exports.handleButtonInteraction = async function(interaction, client) {
                         .setColor('#FF0000')
                         .setTitle('❌ Whitelist Denied')
                         .setDescription(`Gamertag: \`${gamertag}\` has been **DENIED** and notified.${dmFailed ? ' (via mention in whitelist channel)' : ''}`)
+                        .addFields(
+                            { name: 'Denied by', value: `${interaction.user.username}` }
+                        )
                         .setFooter({ text: `Denied by ${interaction.user.username}` })
                         .setTimestamp();
 
                     try {
-                        await interaction.editReply({
-                            embeds: [interaction.message.embeds[0], denialNote],
-                            components: [] // Remove buttons
+                        // Get the current embeds and add the denial note
+                        const currentEmbeds = interaction.message.embeds || [];
+                        await interaction.message.edit({
+                            embeds: [...currentEmbeds, denialNote],
+                            components: [] // Remove buttons again
                         });
+                        
+                        // Delete the processing message after showing denial
+                        setTimeout(() => {
+                            interaction.deleteReply().catch(() => {});
+                        }, 2000);
                     } catch (updateError) {
-                        if (updateError.code === 10062) {
-                            // Interaction expired, try to edit the message directly
-                            try {
-                                await interaction.message.edit({
-                                    embeds: [interaction.message.embeds[0], denialNote],
-                                    components: []
-                                });
-                            } catch (e) {
-                                console.log('⚠️ Could not update expired message:', e.code);
-                            }
-                        } else {
-                            throw updateError;
-                        }
+                        console.log('⚠️ Could not update message with denial note:', updateError.code);
                     }
 
                     // Remove from pending
@@ -856,16 +903,18 @@ module.exports.handleButtonInteraction = async function(interaction, client) {
                     console.log(`❌ Whitelist denied for ${gamertag} by ${interaction.user.username}`);
                 } catch (error) {
                     console.error('❌ Error in background whitelist denial:', error);
-                    try {
-                        await interaction.editReply({ content: '❌ Error denying request!' });
-                    } catch (e) {
-                        console.error('Could not send error response:', e.code);
-                    }
                 }
             })(); // Execute IIFE immediately without awaiting
             
             // Send immediate confirmation that request is being processed
-            await interaction.editReply({ content: '⏳ Processing whitelist denial...' });
+            const processingEmbed = new EmbedBuilder()
+                .setColor('#FFD700')
+                .setTitle('⏳ Processing')
+                .setDescription('Processing whitelist denial...')
+                .setFooter({ text: 'Please wait' })
+                .setTimestamp();
+            
+            await interaction.editReply({ embeds: [processingEmbed] });
 
         } catch (error) {
             console.error('❌ Error deferring whitelist denial:', error);
