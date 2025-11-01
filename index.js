@@ -319,10 +319,10 @@ const updater = require('./bot/Ticket.js');
 client.once("ready", async () => {
   await updater.execute(
     client,
-    '1432672104750387200', //Channel Send ID
-    '1432670594700411000', //Category ID
-    ['1422620387031908522', '1423525483575906455'], // Claim Role ID
-    ['1422620387031908522', '1423525483575906455'], // Close Role ID
+    '1402561307818856570', //Channel Send ID
+    '1402561307818856568', //Category ID
+    ['1433884364701438206', '1433884364701438206'], // Claim Role ID
+    ['1433884364701438206', '1433884364701438206'], // Close Role ID
     '🎫 Support & Tickets', //Title
     'Select an option below to create tickets or report issues!', //Description
     60 * 60 * 1000 // 1 hour Time Collector

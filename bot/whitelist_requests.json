@@ -1,1 +1,15 @@
-{}
+{
+  "test": {
+    "gamertag": "test",
+    "platform": "Java",
+    "userId": "1342370557009854484",
+    "username": "callme.hwph",
+    "discriminator": "0",
+    "avatarURL": "https://cdn.discordapp.com/avatars/1342370557009854484/e6b12018929acad3cf6a01a755d6072a.webp",
+    "requestedAt": "2025-10-31T17:48:05.777Z",
+    "messageId": "1433875194480562177",
+    "status": "pending",
+    "confirmedAt": "2025-10-31T17:48:08.308Z",
+    "adminMessageId": "1433875206853886103"
+  }
+}

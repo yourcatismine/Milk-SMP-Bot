@@ -1,0 +1,39 @@
+{
+  "example_user_id": [
+    {
+      "ticketId": "example_ticket_id",
+      "userId": "example_user_id",
+      "username": "example_username",
+      "category": "question",
+      "responses": {
+        "question_title": "Example question",
+        "question_details": "Example details"
+      },
+      "createdAt": 0,
+      "closedAt": 0,
+      "reason": "staff_closed",
+      "formattedDate": "January 1, 2025",
+      "closedDate": "January 2, 2025",
+      "status": "staff_closed"
+    }
+  ],
+  "1342370557009854484": [
+    {
+      "ticketId": "1433899181214400553",
+      "userId": "1342370557009854484",
+      "username": "callme.hwph",
+      "category": "player",
+      "responses": {
+        "player_username": "xcxcxc",
+        "player_reason": "xcxcxcxcxcxcxc",
+        "player_evidence": "xxxxxxxxxxxxxxxxxxx"
+      },
+      "createdAt": 1761938605673,
+      "closedAt": 1761938627602,
+      "reason": "staff_closed",
+      "formattedDate": "November 1, 2025 at 03:23:25 AM",
+      "closedDate": "November 1, 2025 at 03:23:47 AM",
+      "status": "staff_closed"
+    }
+  ]
+}

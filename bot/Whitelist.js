@@ -1,4 +1,4 @@
-const { Events, EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle } = require('discord.js');
+const { Events, EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle, PermissionsBitField } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 
@@ -6,6 +6,8 @@ const path = require('path');
 const WHITELIST_CHANNEL_ID = '1433815944735494254'; // Change to your whitelist request channel ID
 const CONFIRMATION_CHANNEL_ID = '1432568321387134996'; // Change to staff notification channel ID
 const STAFF_ROLE_ID = '1433817171297042525'; // Change to your staff role ID
+const APPROVED_ROLE_ID = '1433817171297042525'; // Role ID to assign when user is approved (leave empty to disable role assignment)
+const CONTENT_CHANNEL_ID = '1431105707649798205'; // Channel to post approved gamertags (leave empty to disable)
 const COOLDOWN_DURATION = 86400000; // 24 hours cooldown between requests
 
 // WHITELIST REQUESTER SETTING:
@@ -19,6 +21,8 @@ const REQUESTS_FILE = path.join(__dirname, 'whitelist_requests.json');
 let pendingRequests = new Map();
 // Store user cooldowns (userId -> timestamp)
 let userCooldowns = new Map();
+// Store denied users (userId -> timestamp when they were denied, indefinite block)
+let deniedUsers = new Map();
 
 // Load pending requests from file
 function loadRequests() {
@@ -69,42 +73,73 @@ function setCooldown(userId) {
     console.log(`⏱️ Cooldown set for user ${userId}`);
 }
 
-// Extract gamertag from message
+// Extract gamertag and platform from message
+// Returns { gamertag: string, platform: 'Java' | 'Bedrock' } or null
 function extractGamertag(content) {
     const trimmed = content.trim();
     console.log(`   [EXTRACT] Trying to extract from: "${trimmed}" (length: ${trimmed.length})`);
     
-    // First check: is it all word characters and between 2-16 length?
-    if (/^\w{2,16}$/.test(trimmed)) {
-        console.log(`   [EXTRACT] ✅ Matches pattern! Gamertag: "${trimmed}"`);
-        return trimmed;
+    // Check for platform keywords (case-insensitive)
+    let platform = null;
+    const lowerTrimmed = trimmed.toLowerCase();
+    if (lowerTrimmed.includes('java')) {
+        platform = 'Java';
+        console.log(`   [EXTRACT] 🎮 Detected platform: Java`);
+    } else if (lowerTrimmed.includes('bedrock')) {
+        platform = 'Bedrock';
+        console.log(`   [EXTRACT] 🎮 Detected platform: Bedrock`);
     }
     
-    console.log(`   [EXTRACT] ❌ Does not match pattern ^\w{2,16}$ (need 2-16 word chars)`);
+    // If no platform detected, return null (user needs to specify)
+    if (!platform) {
+        console.log(`   [EXTRACT] ❌ No platform detected (need 'Java' or 'Bedrock')`);
+        return null;
+    }
     
-    // If it has spaces or other content, try to extract just the first word
-    const words = trimmed.split(/\s+/);
-    if (words.length > 0) {
-        const firstWord = words[0];
-        console.log(`   [EXTRACT] Checking first word: "${firstWord}" (length: ${firstWord.length})`);
-        if (/^\w{2,16}$/.test(firstWord)) {
-            console.log(`   [EXTRACT] ✅ Found valid gamertag in first word: "${firstWord}"`);
-            return firstWord;
+    // Try to extract gamertag - split by space, dash, underscore
+    // Valid formats: "gamertag Java", "gamertag-Java", "gamertag_Java", "JAMES_VEN Java"
+    const parts = trimmed.split(/[\s\-_]+/).filter(p => p.length > 0);
+    console.log(`   [EXTRACT] Split parts:`, parts);
+    
+    // Collect all non-platform parts to reconstruct the full gamertag
+    const gamertagParts = [];
+    for (const part of parts) {
+        const partLower = part.toLowerCase();
+        if (partLower !== 'java' && partLower !== 'bedrock') {
+            // Check if it's a valid gamertag part (alphanumeric and underscore only)
+            if (/^[a-zA-Z0-9_]+$/.test(part)) {
+                gamertagParts.push(part);
+            }
         }
     }
     
-    console.log(`   [EXTRACT] ❌ No valid gamertag found`);
-    return null;
+    if (gamertagParts.length === 0) {
+        console.log(`   [EXTRACT] ❌ No valid gamertag found`);
+        return null;
+    }
+    
+    // Reconstruct gamertag by joining parts with underscore
+    const gamertag = gamertagParts.join('_');
+    
+    // Validate final gamertag length (2-16 characters, Minecraft limit)
+    if (gamertag.length < 2 || gamertag.length > 16) {
+        console.log(`   [EXTRACT] ❌ Gamertag length invalid: "${gamertag}" (must be 2-16 chars)`);
+        return null;
+    }
+    
+    console.log(`   [EXTRACT] ✅ Found valid gamertag: "${gamertag}" | Platform: ${platform}`);
+    return { gamertag, platform };
 }
 
 // Create confirmation embed
-function createConfirmationEmbed(gamertag, user) {
+function createConfirmationEmbed(gamertag, platform, user) {
     return new EmbedBuilder()
         .setColor('#FFD700')
         .setTitle('✅ Whitelist Request Received')
         .setDescription(`Your whitelist request is being processed!`)
         .addFields(
-            { name: '🎮 Minecraft Gamertag', value: `\`${gamertag}\`` },
+            { name: '🎮 Minecraft Gamertag', value: `\`${gamertag}\``, inline: true },
+            { name: '💻 Platform', value: `\`${platform}\``, inline: true },
             { name: '👤 Discord User', value: `${user.username}#${user.discriminator || '0'}` },
             { name: '⏳ Status', value: 'Waiting for staff confirmation' }
         )
@@ -114,13 +149,14 @@ function createConfirmationEmbed(gamertag, user) {
 }
 
 // Create admin notification embed with buttons
-function createAdminNotificationEmbed(gamertag, user, userId) {
+function createAdminNotificationEmbed(gamertag, platform, user, userId) {
     return new EmbedBuilder()
         .setColor('#00FF00')
         .setTitle('🔔 New Whitelist Request')
         .setDescription(`A user has requested to be whitelisted!`)
         .addFields(
-            { name: '🎮 Minecraft Gamertag', value: `\`${gamertag}\`` },
+            { name: '🎮 Minecraft Gamertag', value: `\`${gamertag}\``, inline: true },
+            { name: '💻 Platform', value: `\`${platform}\``, inline: true },
             { name: '👤 Discord Username', value: `${user.username}` },
             { name: '🆔 User ID', value: `\`${userId}\`` },
             { name: '🖼️ Avatar URL', value: `[Click Here](${user.displayAvatarURL({ dynamic: true })})`  },
@@ -131,15 +167,15 @@ function createAdminNotificationEmbed(gamertag, user, userId) {
 }
 
 // Create accept/deny buttons
-function createDecisionButtons(gamertag) {
+function createDecisionButtons(gamertag, platform) {
     return new ActionRowBuilder()
         .addComponents(
             new ButtonBuilder()
-                .setCustomId(`whitelist_accept_${gamertag}`)
+                .setCustomId(`whitelist_accept_${gamertag}_${platform}`)
                 .setLabel('✅ Accept')
                 .setStyle(ButtonStyle.Success),
             new ButtonBuilder()
-                .setCustomId(`whitelist_deny_${gamertag}`)
+                .setCustomId(`whitelist_deny_${gamertag}_${platform}`)
                 .setLabel('❌ Deny')
                 .setStyle(ButtonStyle.Danger)
         );
@@ -162,6 +198,33 @@ function createResultEmbed(gamertag, user, approved) {
         .setTimestamp();
 }
 
+// Create guidance embed for users who didn't specify platform
+function createGuidanceEmbed() {
+    return new EmbedBuilder()
+        .setColor('#FFD700')
+        .setTitle('📋 Whitelist Format Guide')
+        .setDescription('Please include your Minecraft platform when submitting your gamertag!')
+        .addFields(
+            { 
+                name: '✅ Valid Formats', 
+                value: '`username Java`\n`username Bedrock`\n`username-Java`\n`username-Bedrock`\n`username_Java`', 
+                inline: false 
+            },
+            { 
+                name: '❌ Invalid Format', 
+                value: '`username` (missing platform)\n`username Xbox`\n`username PlayStation`', 
+                inline: false 
+            },
+            { 
+                name: '💡 Examples', 
+                value: '• `Steve Java` → For Java Edition\n• `Alex Bedrock` → For Bedrock Edition\n• `Player_123-Java` → Also works!', 
+                inline: false 
+            }
+        )
+        .setFooter({ text: 'Reply with the correct format to proceed' })
+        .setTimestamp();
+}
+
 loadRequests();
 
 console.log(`\n${'='.repeat(60)}`);
@@ -171,6 +234,62 @@ console.log(`   Staff Channel: ${CONFIRMATION_CHANNEL_ID}`);
 console.log(`   Staff Role: ${STAFF_ROLE_ID}`);
 console.log(`   Cooldown: ${COOLDOWN_DURATION / 1000 / 60} minutes`);
 console.log(`${'='.repeat(60)}\n`);
+
+// Export utility functions for admin commands
+function resetUserWhitelist(userId) {
+    try {
+        // Clear the user's cooldown
+        const hadCooldown = userCooldowns.has(userId);
+        userCooldowns.delete(userId);
+
+        // Find and remove pending requests from this user
+        const clearedGamertags = [];
+        for (const [gamertag, requestData] of pendingRequests.entries()) {
+            if (requestData.userId === userId) {
+                clearedGamertags.push(gamertag);
+                pendingRequests.delete(gamertag);
+            }
+        }
+
+        // Save updated requests to file
+        saveRequests();
+
+        return {
+            success: true,
+            message: `Reset successful for user ${userId}`,
+            cooldownCleared: hadCooldown,
+            cleared: clearedGamertags
+        };
+    } catch (error) {
+        console.error('Error resetting user whitelist:', error);
+        return {
+            success: false,
+            message: `Error: ${error.message}`,
+            cleared: []
+        };
+    }
+}
+
+function clearUserCooldown(userId) {
+    const hadCooldown = userCooldowns.has(userId);
+    userCooldowns.delete(userId);
+    console.log(`⏱️ Cooldown cleared for user ${userId}`);
+    return hadCooldown;
+}
+
+function getUserCooldownStatus(userId) {
+    const isOnCooldown = userCooldowns.has(userId);
+    const remainingMs = getRemainingCooldown(userId);
+    const hours = Math.floor(remainingMs / 3600000);
+    const minutes = Math.floor((remainingMs % 3600000) / 60000);
+    const remaining = `${hours}h ${minutes}m`;
+
+    return {
+        onCooldown: isOnCooldown,
+        remainingMs,
+        remaining: isOnCooldown ? remaining : 'No cooldown'
+    };
+}
 
 module.exports = {
     name: Events.MessageCreate,
@@ -186,7 +305,7 @@ module.exports = {
             console.log(`\n[WHITELIST] New message: "${message.content}" | Channel: ${message.channel.id} | Author: ${message.author.username}`);
 
             // Ignore messages from staff/bots
-            if (message.member?.permissions.has('ADMINISTRATOR')) {
+            if (message.member?.permissions.has(PermissionsBitField.Flags.Administrator)) {
                 if (!ALLOW_ADMIN_REQUESTS) {
                     console.log(`[WHITELIST] Ignoring admin message (ALLOW_ADMIN_REQUESTS = false)`);
                     return;
@@ -198,20 +317,58 @@ module.exports = {
 
             const content = message.content.trim();
             console.log(`[WHITELIST] Content to process: "${content}"`);
-            const gamertag = extractGamertag(content);
+            const extractedData = extractGamertag(content);
             
             // Debug: Log extraction result
-            console.log(`🔍 Content: "${content}" | Extracted gamertag: "${gamertag}"`);
+            console.log(`🔍 Content: "${content}" | Extracted data:`, extractedData);
 
-            // If no valid gamertag format detected, return
-            if (!gamertag) {
-                console.log(`❌ Gamertag was null/empty - ignoring message`);
+            // If no valid gamertag format detected, show guidance
+            if (!extractedData) {
+                console.log(`❌ No valid gamertag with platform found - showing guidance`);
+                const guidanceEmbed = createGuidanceEmbed();
+                const guidanceReply = await message.reply({ 
+                    embeds: [guidanceEmbed], 
+                    flags: 64 // Ephemeral
+                });
+
+                // Delete both messages after 30 seconds
+                setTimeout(() => {
+                    message.delete().catch(() => {});
+                    guidanceReply.delete().catch(() => {});
+                }, 30000);
                 return;
             }
             
-            console.log(`✅ Valid gamertag found! Proceeding with request...`);
+            const { gamertag, platform } = extractedData;
+            console.log(`✅ Valid gamertag found! Tag: ${gamertag} | Platform: ${platform}`);
 
             const userId = message.author.id;
+
+            // Check if user is denied (blocked from requesting)
+            if (deniedUsers.has(userId)) {
+                const deniedEmbed = new EmbedBuilder()
+                    .setColor('#FF0000')
+                    .setTitle('❌ Request Blocked')
+                    .setDescription(`Your whitelist request has been **DENIED** and you are blocked from reapplying.`)
+                    .addFields(
+                        { name: '📋 Reason', value: 'Your previous request did not meet our requirements' },
+                        { name: '📞 Contact Staff', value: 'If you believe this is a mistake, please contact staff directly' }
+                    )
+                    .setFooter({ text: 'You cannot submit new requests at this time' })
+                    .setTimestamp();
+
+                const reply = await message.reply({ 
+                    embeds: [deniedEmbed], 
+                    flags: 64 // Ephemeral
+                });
+
+                // Delete both the user's message and the bot's reply after 5 seconds
+                setTimeout(() => {
+                    message.delete().catch(() => {});
+                    reply.delete().catch(() => {});
+                }, 5000);
+                return;
+            }
 
             // Check if user is on cooldown
             if (isOnCooldown(userId)) {
@@ -270,6 +427,7 @@ module.exports = {
             // Store temporarily (not final until confirmed)
             const tempRequestData = {
                 gamertag,
+                platform,
                 userId,
                 username: message.author.username,
                 discriminator: message.author.discriminator,
@@ -283,11 +441,11 @@ module.exports = {
             const confirmationButtons = new ActionRowBuilder()
                 .addComponents(
                     new ButtonBuilder()
-                        .setCustomId(`whitelist_confirm_${gamertag}_${userId}`)
+                        .setCustomId(`whitelist_confirm_${gamertag}_${platform}_${userId}`)
                         .setLabel('✅ Confirm')
                         .setStyle(ButtonStyle.Success),
                     new ButtonBuilder()
-                        .setCustomId(`whitelist_cancel_${gamertag}_${userId}`)
+                        .setCustomId(`whitelist_cancel_${gamertag}_${platform}_${userId}`)
                         .setLabel('❌ Cancel/Edit')
                         .setStyle(ButtonStyle.Secondary)
                 );
@@ -296,9 +454,10 @@ module.exports = {
             const confirmEmbed = new EmbedBuilder()
                 .setColor('#FFD700')
                 .setTitle('✅ Confirm Your Whitelist Request')
-                .setDescription(`Please verify your Minecraft gamertag:`)
+                .setDescription(`Please verify your Minecraft details:`)
                 .addFields(
-                    { name: '🎮 Minecraft Gamertag', value: `\`${gamertag}\``, inline: false },
+                    { name: '🎮 Minecraft Gamertag', value: `\`${gamertag}\``, inline: true },
+                    { name: '💻 Platform', value: `\`${platform}\``, inline: true },
                     { name: '⚠️ Make sure this is correct!', value: 'Click **Confirm** to proceed or **Cancel** to change it.', inline: false }
                 )
                 .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
@@ -343,8 +502,10 @@ module.exports.handleButtonInteraction = async function(interaction, client) {
     // Handle user confirmation button
     if (customId.startsWith('whitelist_confirm_')) {
         const parts = customId.split('_');
-        const gamertag = parts[2];
-        const userId = parts[3];
+        // Format: whitelist_confirm_{gamertag}_{platform}_{userId}
+        const userId = parts[parts.length - 1]; // Last part is userId
+        const platform = parts[parts.length - 2]; // Second to last is platform
+        const gamertag = parts.slice(2, -2).join('_'); // Everything between confirm and platform
         
         if (userId !== interaction.user.id) {
             await interaction.reply({ 
@@ -389,8 +550,8 @@ module.exports.handleButtonInteraction = async function(interaction, client) {
             try {
                 const staffChannel = await interaction.guild.channels.fetch(CONFIRMATION_CHANNEL_ID);
                 if (staffChannel?.isTextBased()) {
-                    const adminEmbed = createAdminNotificationEmbed(gamertag, interaction.user, userId);
-                    const buttons = createDecisionButtons(gamertag);
+                    const adminEmbed = createAdminNotificationEmbed(gamertag, platform, interaction.user, userId);
+                    const buttons = createDecisionButtons(gamertag, platform);
 
                     const adminMessage = await staffChannel.send({
                         content: `<@&${STAFF_ROLE_ID}>`, // Mention staff role
@@ -403,7 +564,7 @@ module.exports.handleButtonInteraction = async function(interaction, client) {
                     pendingRequests.set(gamertag, finalRequestData);
                     saveRequests();
 
-                    console.log(`✅ Whitelist request CONFIRMED from ${interaction.user.username} for gamertag: ${gamertag}`);
+                    console.log(`✅ Whitelist request CONFIRMED from ${interaction.user.username} for gamertag: ${gamertag} (${platform})`);
                 }
             } catch (error) {
                 console.error('❌ Error sending staff notification:', error);
@@ -428,8 +589,10 @@ module.exports.handleButtonInteraction = async function(interaction, client) {
     // Handle user cancellation button
     if (customId.startsWith('whitelist_cancel_')) {
         const parts = customId.split('_');
-        const gamertag = parts[2];
-        const userId = parts[3];
+        // Format: whitelist_cancel_{gamertag}_{platform}_{userId}
+        const userId = parts[parts.length - 1]; // Last part is userId
+        const platform = parts[parts.length - 2]; // Second to last is platform
+        const gamertag = parts.slice(2, -2).join('_'); // Everything between cancel and platform
         
         if (userId !== interaction.user.id) {
             await interaction.reply({ 
@@ -456,148 +619,271 @@ module.exports.handleButtonInteraction = async function(interaction, client) {
     
     // Handle accept button
     if (customId.startsWith('whitelist_accept_')) {
-        const gamertag = customId.replace('whitelist_accept_', '');
+        const parts = customId.replace('whitelist_accept_', '').split('_');
+        // Format: {gamertag}_{platform}
+        const platform = parts[parts.length - 1]; // Last part is platform
+        const gamertag = parts.slice(0, -1).join('_'); // Everything before platform
+        
         const requestData = pendingRequests.get(gamertag);
 
         if (!requestData) {
-            await interaction.reply({ 
-                content: '❌ Request not found or already processed!',
-                flags: 64 // Ephemeral
-            });
+            try {
+                await interaction.deferReply({ ephemeral: true });
+                await interaction.editReply({ content: '❌ Request not found or already processed!' });
+            } catch (e) {
+                console.error('Could not respond to expired interaction:', e.code);
+            }
             return;
         }
 
         try {
-            const user = await client.users.fetch(requestData.userId);
-            const member = await interaction.guild.members.fetch(requestData.userId);
+            // IMPORTANT: Defer IMMEDIATELY - must happen within 3 seconds
+            await interaction.deferReply();
             
-            // Set nickname to ᴍɪʟᴋ - {gamertag}
-            const newNickname = `ᴍɪʟᴋ - ${gamertag}`;
-            try {
-                await member.setNickname(newNickname);
-                console.log(`✅ Set nickname for ${user.username} to: ${newNickname}`);
-            } catch (err) {
-                console.error(`❌ Could not set nickname for ${user.username}:`, err.message);
-            }
-            
-            // Send approval embed to user
-            const approvalEmbed = createResultEmbed(gamertag, user, true);
-            let dmFailed = false;
-            await user.send({ embeds: [approvalEmbed] }).catch((err) => {
-                console.log(`❌ Could not DM user ${requestData.userId}: ${err.message}`);
-                dmFailed = true;
-            });
-
-            // If DM failed, mention user in whitelist channel
-            if (dmFailed) {
+            // Do heavy work in background while Discord has acknowledged the interaction
+            (async () => {
                 try {
-                    const whitelistChannel = await interaction.guild.channels.fetch(WHITELIST_CHANNEL_ID);
-                    if (whitelistChannel?.isTextBased()) {
-                        await whitelistChannel.send({
-                            content: `<@${requestData.userId}> Your whitelist request for **${gamertag}** has been **APPROVED**! ✅ Welcome to the server!`
-                        });
-                        console.log(`✅ Sent approval mention to whitelist channel for user ${requestData.userId}`);
+                    const user = await client.users.fetch(requestData.userId);
+                    const member = await interaction.guild.members.fetch(requestData.userId);
+                    
+                    // Set nickname to ᴍɪʟᴋ - {gamertag} | {platform}
+                    const newNickname = `ᴍɪʟᴋ - ${gamertag} | ${platform}`;
+                    try {
+                        await member.setNickname(newNickname);
+                        console.log(`✅ Set nickname for ${user.username} to: ${newNickname}`);
+                    } catch (err) {
+                        console.error(`❌ Could not set nickname for ${user.username}:`, err.message);
                     }
-                } catch (err) {
-                    console.error(`❌ Could not send mention to whitelist channel:`, err);
+
+                    // Assign approved role if configured
+                    if (APPROVED_ROLE_ID) {
+                        try {
+                            await member.roles.add(APPROVED_ROLE_ID);
+                            console.log(`✅ Assigned approved role to ${user.username}`);
+                        } catch (err) {
+                            console.error(`❌ Could not assign role to ${user.username}:`, err.message);
+                        }
+                    }
+
+                    // Send gamertag to content channel if configured
+                    if (CONTENT_CHANNEL_ID) {
+                        try {
+                            const contentChannel = await interaction.guild.channels.fetch(CONTENT_CHANNEL_ID);
+                            if (contentChannel?.isTextBased()) {
+                                await contentChannel.send(`${gamertag}`);
+                                console.log(`✅ Posted gamertag to content channel: ${gamertag}`);
+                            }
+                        } catch (err) {
+                            console.error(`❌ Could not post to content channel:`, err.message);
+                        }
+                    }
+                    
+                    // Send approval embed to user
+                    const approvalEmbed = createResultEmbed(gamertag, user, true);
+                    let dmFailed = false;
+                    await user.send({ embeds: [approvalEmbed] }).catch((err) => {
+                        console.log(`❌ Could not DM user ${requestData.userId}: ${err.message}`);
+                        dmFailed = true;
+                    });
+
+                    // If DM failed, mention user in whitelist channel
+                    if (dmFailed) {
+                        try {
+                            const whitelistChannel = await interaction.guild.channels.fetch(WHITELIST_CHANNEL_ID);
+                            if (whitelistChannel?.isTextBased()) {
+                                await whitelistChannel.send({
+                                    content: `<@${requestData.userId}> Your whitelist request for **${gamertag}** has been **APPROVED**! ✅ Welcome to the server!`
+                                });
+                                console.log(`✅ Sent approval mention to whitelist channel for user ${requestData.userId}`);
+                            }
+                        } catch (err) {
+                            console.error(`❌ Could not send mention to whitelist channel:`, err);
+                        }
+                    }
+
+                    // Update the admin message with a note
+                    const approvalNote = new EmbedBuilder()
+                        .setColor('#00FF00')
+                        .setTitle('✅ Whitelist Approved')
+                        .setDescription(`Gamertag: \`${gamertag}\` has been **APPROVED** and notified.${dmFailed ? ' (via mention in whitelist channel)' : ''}`)
+                        .setFooter({ text: `Approved by ${interaction.user.username}` })
+                        .setTimestamp();
+
+                    try {
+                        await interaction.editReply({
+                            embeds: [interaction.message.embeds[0], approvalNote],
+                            components: [] // Remove buttons
+                        });
+                    } catch (updateError) {
+                        if (updateError.code === 10062) {
+                            // Interaction expired, try to edit the message directly
+                            try {
+                                await interaction.message.edit({
+                                    embeds: [interaction.message.embeds[0], approvalNote],
+                                    components: []
+                                });
+                            } catch (e) {
+                                console.log('⚠️ Could not update expired message:', e.code);
+                            }
+                        } else {
+                            throw updateError;
+                        }
+                    }
+
+                    // Remove from pending
+                    pendingRequests.delete(gamertag);
+                    saveRequests();
+
+                    console.log(`✅ Whitelist approved for ${gamertag} by ${interaction.user.username}`);
+                } catch (error) {
+                    console.error('❌ Error in background whitelist approval:', error);
+                    try {
+                        await interaction.editReply({ content: '❌ Error approving request!' });
+                    } catch (e) {
+                        console.error('Could not send error response:', e.code);
+                    }
                 }
-            }
-
-            // Update the admin message with a note
-            const approvalNote = new EmbedBuilder()
-                .setColor('#00FF00')
-                .setTitle('✅ Whitelist Approved')
-                .setDescription(`Gamertag: \`${gamertag}\` has been **APPROVED** and notified.${dmFailed ? ' (via mention in whitelist channel)' : ''}`)
-                .setFooter({ text: `Approved by ${interaction.user.username}` })
-                .setTimestamp();
-
-            await interaction.update({
-                embeds: [interaction.message.embeds[0], approvalNote],
-                components: [] // Remove buttons
-            });
-
-            // Remove from pending
-            pendingRequests.delete(gamertag);
-            saveRequests();
-
-            console.log(`✅ Whitelist approved for ${gamertag} by ${interaction.user.username}`);
+            })(); // Execute IIFE immediately without awaiting
+            
+            // Send immediate confirmation that request is being processed
+            await interaction.editReply({ content: '⏳ Processing whitelist approval...' });
 
         } catch (error) {
-            console.error('❌ Error approving whitelist:', error);
-            await interaction.reply({ 
-                content: '❌ Error approving request!',
-                flags: 64 // Ephemeral
-            });
+            console.error('❌ Error deferring whitelist approval:', error);
+            try {
+                if (!interaction.replied) {
+                    await interaction.reply({ 
+                        content: '❌ Error approving request!',
+                        flags: 64 // Ephemeral
+                    });
+                }
+            } catch (e) {
+                console.error('Could not send error response:', e.code);
+            }
         }
     }
 
     // Handle deny button
     if (customId.startsWith('whitelist_deny_')) {
-        const gamertag = customId.replace('whitelist_deny_', '');
+        const parts = customId.replace('whitelist_deny_', '').split('_');
+        // Format: {gamertag}_{platform}
+        const platform = parts[parts.length - 1]; // Last part is platform
+        const gamertag = parts.slice(0, -1).join('_'); // Everything before platform
+        
         const requestData = pendingRequests.get(gamertag);
 
         if (!requestData) {
-            await interaction.reply({ 
-                content: '❌ Request not found or already processed!',
-                flags: 64 // Ephemeral
-            });
+            try {
+                await interaction.deferReply({ ephemeral: true });
+                await interaction.editReply({ content: '❌ Request not found or already processed!' });
+            } catch (e) {
+                console.error('Could not respond to expired interaction:', e.code);
+            }
             return;
         }
 
         try {
-            const user = await client.users.fetch(requestData.userId);
+            // IMPORTANT: Defer IMMEDIATELY - must happen within 3 seconds
+            await interaction.deferReply();
             
-            // Send denial embed to user
-            const denialEmbed = createResultEmbed(gamertag, user, false);
-            let dmFailed = false;
-            await user.send({ embeds: [denialEmbed] }).catch((err) => {
-                console.log(`❌ Could not DM user ${requestData.userId}: ${err.message}`);
-                dmFailed = true;
-            });
-
-            // If DM failed, mention user in whitelist channel
-            if (dmFailed) {
+            // Do heavy work in background while Discord has acknowledged the interaction
+            (async () => {
                 try {
-                    const whitelistChannel = await interaction.guild.channels.fetch(WHITELIST_CHANNEL_ID);
-                    if (whitelistChannel?.isTextBased()) {
-                        await whitelistChannel.send({
-                            content: `<@${requestData.userId}> Your whitelist request for **${gamertag}** has been **DENIED**. ❌ Please contact staff for more information.`
-                        });
-                        console.log(`✅ Sent denial mention to whitelist channel for user ${requestData.userId}`);
+                    const user = await client.users.fetch(requestData.userId);
+                    
+                    // Add user to denied list (permanent block from reapplying)
+                    deniedUsers.set(requestData.userId, new Date().toISOString());
+                    console.log(`🚫 User ${user.username} (${requestData.userId}) added to denied list`);
+                    
+                    // Send denial embed to user
+                    const denialEmbed = createResultEmbed(gamertag, user, false);
+                    let dmFailed = false;
+                    await user.send({ embeds: [denialEmbed] }).catch((err) => {
+                        console.log(`❌ Could not DM user ${requestData.userId}: ${err.message}`);
+                        dmFailed = true;
+                    });
+
+                    // If DM failed, mention user in whitelist channel
+                    if (dmFailed) {
+                        try {
+                            const whitelistChannel = await interaction.guild.channels.fetch(WHITELIST_CHANNEL_ID);
+                            if (whitelistChannel?.isTextBased()) {
+                                await whitelistChannel.send({
+                                    content: `<@${requestData.userId}> Your whitelist request for **${gamertag}** has been **DENIED**. ❌ Please contact staff for more information.`
+                                });
+                                console.log(`✅ Sent denial mention to whitelist channel for user ${requestData.userId}`);
+                            }
+                        } catch (err) {
+                            console.error(`❌ Could not send mention to whitelist channel:`, err);
+                        }
                     }
-                } catch (err) {
-                    console.error(`❌ Could not send mention to whitelist channel:`, err);
+
+                    // Update the admin message with a note
+                    const denialNote = new EmbedBuilder()
+                        .setColor('#FF0000')
+                        .setTitle('❌ Whitelist Denied')
+                        .setDescription(`Gamertag: \`${gamertag}\` has been **DENIED** and notified.${dmFailed ? ' (via mention in whitelist channel)' : ''}`)
+                        .setFooter({ text: `Denied by ${interaction.user.username}` })
+                        .setTimestamp();
+
+                    try {
+                        await interaction.editReply({
+                            embeds: [interaction.message.embeds[0], denialNote],
+                            components: [] // Remove buttons
+                        });
+                    } catch (updateError) {
+                        if (updateError.code === 10062) {
+                            // Interaction expired, try to edit the message directly
+                            try {
+                                await interaction.message.edit({
+                                    embeds: [interaction.message.embeds[0], denialNote],
+                                    components: []
+                                });
+                            } catch (e) {
+                                console.log('⚠️ Could not update expired message:', e.code);
+                            }
+                        } else {
+                            throw updateError;
+                        }
+                    }
+
+                    // Remove from pending
+                    pendingRequests.delete(gamertag);
+                    saveRequests();
+
+                    // Do NOT reset cooldown - user is now denied permanently and cannot reapply
+
+                    console.log(`❌ Whitelist denied for ${gamertag} by ${interaction.user.username}`);
+                } catch (error) {
+                    console.error('❌ Error in background whitelist denial:', error);
+                    try {
+                        await interaction.editReply({ content: '❌ Error denying request!' });
+                    } catch (e) {
+                        console.error('Could not send error response:', e.code);
+                    }
                 }
-            }
-
-            // Update the admin message with a note
-            const denialNote = new EmbedBuilder()
-                .setColor('#FF0000')
-                .setTitle('❌ Whitelist Denied')
-                .setDescription(`Gamertag: \`${gamertag}\` has been **DENIED** and notified.${dmFailed ? ' (via mention in whitelist channel)' : ''}`)
-                .setFooter({ text: `Denied by ${interaction.user.username}` })
-                .setTimestamp();
-
-            await interaction.update({
-                embeds: [interaction.message.embeds[0], denialNote],
-                components: [] // Remove buttons
-            });
-
-            // Remove from pending
-            pendingRequests.delete(gamertag);
-            saveRequests();
-
-            // Reset user cooldown so they can try again
-            userCooldowns.delete(requestData.userId);
-
-            console.log(`❌ Whitelist denied for ${gamertag} by ${interaction.user.username}`);
+            })(); // Execute IIFE immediately without awaiting
+            
+            // Send immediate confirmation that request is being processed
+            await interaction.editReply({ content: '⏳ Processing whitelist denial...' });
 
         } catch (error) {
-            console.error('❌ Error denying whitelist:', error);
-            await interaction.reply({ 
-                content: '❌ Error denying request!',
-                flags: 64 // Ephemeral
-            });
+            console.error('❌ Error deferring whitelist denial:', error);
+            try {
+                if (!interaction.replied) {
+                    await interaction.reply({ 
+                        content: '❌ Error denying request!',
+                        flags: 64 // Ephemeral
+                    });
+                }
+            } catch (e) {
+                console.error('Could not send error response:', e.code);
+            }
         }
     }
 };
+
+// Export utility functions for admin commands
+module.exports.resetUserWhitelist = resetUserWhitelist;
+module.exports.clearUserCooldown = clearUserCooldown;
+module.exports.getUserCooldownStatus = getUserCooldownStatus;
