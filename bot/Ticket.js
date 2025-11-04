@@ -416,7 +416,7 @@ module.exports = {
             parent: ticketCategoryId,
             permissionOverwrites: [
               { id: everyone, deny: [PermissionsBitField.Flags.ViewChannel] },
-              { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel] },
+              { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
             ]
           });
 
@@ -439,7 +439,13 @@ module.exports = {
             .setStyle(ButtonStyle.Primary)
             .setEmoji('📊');
 
-          const btnRow = new ActionRowBuilder().addComponents(claimBtn, closeBtn, statusBtn);
+          const addUserBtn = new ButtonBuilder()
+            .setCustomId('ticket-add-user')
+            .setLabel('Add User')
+            .setStyle(ButtonStyle.Primary)
+            .setEmoji('👥');
+
+          const btnRow = new ActionRowBuilder().addComponents(claimBtn, closeBtn, statusBtn, addUserBtn);
 
           // Create summary of responses
           const summary = this.summarizeResponses(ticketType, responses);
@@ -789,8 +795,90 @@ module.exports = {
           }
 
         } else if (interaction.customId === 'ticket-close') {
-          // Archive the ticket to history
-          archiveTicket(interaction.channel.id, ticketData, 'staff_closed');
+          // Show close modal with reason selection
+          const closeModal = new ModalBuilder()
+            .setCustomId('ticket-close-modal')
+            .setTitle('Close Ticket');
+
+          const reasonInput = new TextInputBuilder()
+            .setCustomId('close_reason')
+            .setLabel('Reason for closing (optional)')
+            .setStyle(TextInputStyle.Paragraph)
+            .setPlaceholder('e.g., Problem Solved, Invalid, Wrong Ticket')
+            .setRequired(false)
+            .setMaxLength(500);
+
+          const modalRow = new ActionRowBuilder().addComponents(reasonInput);
+          closeModal.addComponents(modalRow);
+
+          await interaction.showModal(closeModal);
+        } else if (interaction.customId === 'ticket-add-user') {
+          // Check if user is the ticket creator
+          if (interaction.user.id !== ticketData.userId) {
+            const noPermEmbed = new EmbedBuilder()
+              .setTitle('❌ Access Denied')
+              .setDescription('Only the ticket creator can add users to this ticket.')
+              .setColor(0xFF0000)
+              .setTimestamp()
+              .setFooter({ text: 'Ticket System • Permission denied' });
+
+            return interaction.reply({ embeds: [noPermEmbed], ephemeral: true });
+          }
+
+          // Send modal to get the user to add
+          const addUserModal = new ModalBuilder()
+            .setCustomId('ticket-add-user-modal')
+            .setTitle('Add User to Ticket');
+
+          const userInput = new TextInputBuilder()
+            .setCustomId('user_to_add')
+            .setLabel('User ID or @mention')
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder('Enter user ID or mention a user')
+            .setRequired(true);
+
+          const addUserModalRow = new ActionRowBuilder().addComponents(userInput);
+          addUserModal.addComponents(addUserModalRow);
+
+          await interaction.showModal(addUserModal);
+        }
+      }
+    });
+
+    // Handle Close Modal
+    client.on('interactionCreate', async interaction => {
+      if (interaction.isModalSubmit() && interaction.customId === 'ticket-close-modal') {
+        await interaction.deferReply({ ephemeral: true });
+
+        const ticketChannel = interaction.channel;
+        const ticketData = activeTickets[ticketChannel.id];
+        const closeReason = interaction.fields.getTextInputValue('close_reason') || 'No reason provided';
+
+        if (!ticketData) {
+          await interaction.editReply({ 
+            content: '❌ This is not a valid ticket channel.',
+          });
+          return;
+        }
+
+        // Check if user has staff permission to close
+        const userRoles = interaction.member.roles.cache;
+        const hasPermission = userRoles.some(role => ticketData.closeRoles.includes(role.id));
+
+        if (!hasPermission) {
+          const noPermEmbed = new EmbedBuilder()
+            .setTitle('❌ Access Denied')
+            .setDescription('You don\'t have permission to close this ticket.')
+            .setColor(0xFF0000)
+            .setTimestamp()
+            .setFooter({ text: 'Ticket System' });
+
+          return interaction.editReply({ embeds: [noPermEmbed] });
+        }
+
+        try {
+          // Archive the ticket to history with reason
+          archiveTicket(ticketChannel.id, ticketData, closeReason);
           
           // Send DM to ticket creator before closing
           try {
@@ -801,7 +889,8 @@ module.exports = {
               .addFields(
                 { name: '📋 Category', value: ticketData.category.replace(/_/g, ' '), inline: true },
                 { name: '👤 Closed By', value: `${interaction.user.tag}`, inline: true },
-                { name: '⏰ Closed At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
+                { name: '❌ Reason', value: closeReason, inline: true },
+                { name: '⏰ Closed At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
               )
               .setColor(0xFF0000)
               .setTimestamp()
@@ -814,8 +903,8 @@ module.exports = {
             }
           }
           
-          delete activeTickets[interaction.channel.id];
-          delete ticketRuntimes[interaction.channel.id];
+          delete activeTickets[ticketChannel.id];
+          delete ticketRuntimes[ticketChannel.id];
           saveTicketsData();
           
           const closeSuccessEmbed = new EmbedBuilder()
@@ -823,6 +912,7 @@ module.exports = {
             .setDescription('This ticket is being closed by staff.')
             .addFields(
               { name: '👤 Closed By', value: `${interaction.user}`, inline: true },
+              { name: '❌ Reason', value: closeReason, inline: true },
               { name: '⏰ Channel Deletion', value: 'In 5 seconds', inline: true },
               { name: '💌 Notice', value: 'Ticket archived to history', inline: true }
             )
@@ -831,13 +921,14 @@ module.exports = {
             .setTimestamp()
             .setFooter({ text: 'Ticket System • Session Closed' });
 
-          await interaction.reply({ embeds: [closeSuccessEmbed], ephemeral: true });
+          await interaction.editReply({ embeds: [closeSuccessEmbed] });
 
           const publicCloseEmbed = new EmbedBuilder()
             .setTitle('🔒 Ticket Closed')
             .setDescription('This ticket has been closed and archived.')
             .addFields(
               { name: '👤 Closed By', value: `${interaction.user}`, inline: true },
+              { name: '❌ Reason', value: closeReason, inline: true },
               { name: '⏰ Closed At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
               { name: '💾 Archived', value: 'Ticket history saved ✓', inline: true }
             )
@@ -847,6 +938,159 @@ module.exports = {
 
           await interaction.channel.send({ embeds: [publicCloseEmbed] });
           setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
+        } catch (error) {
+          console.error('Error closing ticket:', error);
+          const errorEmbed = new EmbedBuilder()
+            .setTitle('❌ Error Closing Ticket')
+            .setDescription('An error occurred while trying to close the ticket.')
+            .setColor(0xFF0000)
+            .setTimestamp()
+            .setFooter({ text: 'Ticket System' });
+
+          return interaction.editReply({ embeds: [errorEmbed] });
+        }
+      }
+    });
+
+    // Handle Add User Modal
+    client.on('interactionCreate', async interaction => {
+      if (interaction.isModalSubmit() && interaction.customId === 'ticket-add-user-modal') {
+        const ticketChannel = interaction.channel;
+        const ticketData = activeTickets[ticketChannel.id];
+
+        if (!ticketData) {
+          await interaction.reply({ 
+            content: '❌ This is not a valid ticket channel.',
+            ephemeral: true 
+          });
+          return;
+        }
+
+        // Check if user is ticket creator
+        if (interaction.user.id !== ticketData.userId) {
+          await interaction.reply({ 
+            content: '❌ Only the ticket creator can add users.',
+            ephemeral: true 
+          });
+          return;
+        }
+
+        await interaction.deferReply({ ephemeral: true });
+
+        const userInput = interaction.fields.getTextInputValue('user_to_add');
+        let userToAdd = null;
+
+        // Try to parse the input as a user ID or mention
+        try {
+          // Extract ID from mention format <@123456>
+          const mentionMatch = userInput.match(/<@!?(\d+)>/);
+          const userId = mentionMatch ? mentionMatch[1] : userInput;
+
+          // Fetch the user
+          userToAdd = await interaction.client.users.fetch(userId);
+        } catch (error) {
+          const errorEmbed = new EmbedBuilder()
+            .setTitle('❌ User Not Found')
+            .setDescription('Could not find a user with that ID or mention.')
+            .setColor(0xFF0000)
+            .setTimestamp()
+            .setFooter({ text: 'Ticket System' });
+
+          return interaction.editReply({ embeds: [errorEmbed] });
+        }
+
+        // Check if user is a bot
+        if (userToAdd.bot) {
+          const errorEmbed = new EmbedBuilder()
+            .setTitle('❌ Cannot Add Bot')
+            .setDescription('You cannot add bots to your ticket. Please select a valid user.')
+            .setColor(0xFF0000)
+            .setTimestamp()
+            .setFooter({ text: 'Ticket System' });
+
+          return interaction.editReply({ embeds: [errorEmbed] });
+        }
+
+        // Check if user is already in the ticket
+        try {
+          const permissions = ticketChannel.permissionOverwrites.cache.get(userToAdd.id);
+          if (permissions && permissions.allow.has(PermissionsBitField.Flags.ViewChannel)) {
+            const alreadyAddedEmbed = new EmbedBuilder()
+              .setTitle('⚠️ User Already Added')
+              .setDescription(`${userToAdd} is already added to this ticket.`)
+              .setColor(0xFFAA00)
+              .setTimestamp()
+              .setFooter({ text: 'Ticket System' });
+
+            return interaction.editReply({ embeds: [alreadyAddedEmbed] });
+          }
+        } catch (error) {
+          console.error('Error checking existing permissions:', error);
+        }
+
+        // Add the user to the ticket channel
+        try {
+          await ticketChannel.permissionOverwrites.create(userToAdd, {
+            ViewChannel: true,
+            SendMessages: true,
+            ReadMessageHistory: true
+          });
+
+          const successEmbed = new EmbedBuilder()
+            .setTitle('✅ User Added Successfully')
+            .setDescription(`${userToAdd} has been added to the ticket.`)
+            .addFields(
+              { name: '👤 Added User', value: `${userToAdd}`, inline: true },
+              { name: '📋 Ticket', value: `#${ticketChannel.name}`, inline: true },
+              { name: '⏰ Added At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+            )
+            .setColor(0x00FF00)
+            .setTimestamp()
+            .setFooter({ text: 'Ticket System' });
+
+          // Send notification to the added user
+          const notificationEmbed = new EmbedBuilder()
+            .setTitle('📩 Added to Ticket')
+            .setDescription(`You have been added to a support ticket.`)
+            .addFields(
+              { name: '🎫 Ticket Channel', value: `${ticketChannel}`, inline: true },
+              { name: '👤 Added By', value: `${interaction.user}`, inline: true },
+              { name: '⏰ Added At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+            )
+            .setColor(0x0099FF)
+            .setTimestamp()
+            .setFooter({ text: 'Ticket System' });
+
+          try {
+            await userToAdd.send({ embeds: [notificationEmbed] });
+          } catch (error) {
+            if (error.code !== 50007) {
+              console.error('Failed to send DM to added user:', error);
+            }
+          }
+
+          // Send a notification message in the ticket channel
+          const channelNotificationEmbed = new EmbedBuilder()
+            .setTitle('👥 User Added to Ticket')
+            .setDescription(`${userToAdd} has been added to this ticket by ${interaction.user}.`)
+            .setColor(0x0099FF)
+            .setTimestamp()
+            .setFooter({ text: 'Ticket System' });
+
+          await ticketChannel.send({ embeds: [channelNotificationEmbed] });
+
+          await interaction.editReply({ embeds: [successEmbed] });
+
+        } catch (error) {
+          console.error('Error adding user to ticket:', error);
+          const errorEmbed = new EmbedBuilder()
+            .setTitle('❌ Error Adding User')
+            .setDescription('An error occurred while trying to add the user to the ticket.')
+            .setColor(0xFF0000)
+            .setTimestamp()
+            .setFooter({ text: 'Ticket System' });
+
+          return interaction.editReply({ embeds: [errorEmbed] });
         }
       }
     });
